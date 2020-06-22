@@ -15,7 +15,8 @@ type Object struct {
 	Methods     Methods // Deprecated, use FieldFunc instead.
 	key         string
 	ServiceName string
-	IsFederated bool
+	IsRoot      bool
+	IsShadow    bool
 }
 
 type paginationObject struct {
@@ -267,6 +268,7 @@ func (s *Object) ManualPaginationWithFallback(name string, manualPaginatedFunc i
 
 type federation struct{}
 
+// FederatedFieldFunc registers the federated field func on the Federation object nested on a query object
 func (s *Schema) FederatedFieldFunc(name string, f interface{}, options ...FieldFuncOption) {
 	// Create a field func called "__federation" on the root query object
 	q := s.Query()
@@ -281,13 +283,16 @@ func (s *Schema) FederatedFieldFunc(name string, f interface{}, options ...Field
 
 	// Create a method on the "Federation" object to create the shadow object from the federated keys
 	m := &method{Fn: f}
+
 	for _, opt := range options {
 		opt.apply(m)
 	}
+
 	federatedMethodName := fmt.Sprintf("%s-%s", name, obj.ServiceName)
 	if _, ok := obj.Methods[federatedMethodName]; ok {
 		panic("duplicate method")
 	}
+
 	obj.Methods[federatedMethodName] = m
 }
 
@@ -331,6 +336,10 @@ type method struct {
 	// FederationType is an object where all the fields are keys
 	// that can be exposed over federation
 	FederationType interface{}
+
+	// ShadowObjectType is an object where all the fields are keys
+	// that can be fetched in a federated subquery
+	ShadowObjectType interface{}
 }
 
 type concurrencyArgs struct {
@@ -388,7 +397,7 @@ func (s *Schema) FederatedObject(name string, typ interface{}) *Object {
 		Name:        name,
 		Type:        typ,
 		ServiceName: s.Name,
-		IsFederated: true,
+		IsRoot:      true,
 	}
 	s.objects[name] = object
 	return object

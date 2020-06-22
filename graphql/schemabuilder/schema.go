@@ -119,7 +119,11 @@ func (f objectOptionFunc) apply(m *Object) { f(m) }
 // RootObject is an option that can be passed to a Object to indicate that the object
 // can have field funcs on other severs, allowing it to be federated.
 var RootObject objectOptionFunc = func(m *Object) {
-	m.IsFederated = true
+	m.IsRoot = true
+}
+
+var ShadowObject objectOptionFunc = func(m *Object) {
+	m.IsShadow = true
 }
 
 // Object registers a struct as a GraphQL Object in our Schema.
@@ -145,18 +149,40 @@ func (s *Schema) Object(name string, typ interface{}, options ...ObjectOption) *
 		opt.apply(object)
 	}
 
-	if object.IsFederated {
+	if object.IsRoot {
 		federatedObjectType := reflect.New(reflect.TypeOf(typ)).Interface()
 		if object.Methods == nil {
 			object.Methods = make(Methods)
 		}
-
-		federatedMethod := &method{}
+		federatedMethod := &method{
+			FederationType: federatedObjectType,
+		}
 		if _, ok := object.Methods[federationField]; ok {
 			panic("duplicate federation method")
 		}
-		federatedMethod.FederationType = federatedObjectType
 		object.Methods[federationField] = federatedMethod
+	}
+
+	if object.IsShadow {
+		// Create federation object on the root query
+		q := s.Query()
+		if _, ok := q.Methods["__federation"]; !ok {
+			q.FieldFunc("__federation", func() federation { return federation{} })
+		}
+		federationObject := s.Object("Federation", federation{})
+		rootObjectType := reflect.New(reflect.TypeOf(typ)).Interface()
+		// Create a method for fetching the federated object
+		m := &method{
+			ShadowObjectType: rootObjectType,
+		}
+		if federationObject.Methods == nil {
+			federationObject.Methods = make(Methods)
+		}
+		federatedMethodName := fmt.Sprintf("%s-%s", name, s.Name)
+		if _, ok := federationObject.Methods[federatedMethodName]; ok {
+			panic("duplicate method")
+		}
+		federationObject.Methods[federatedMethodName] = m
 	}
 
 	return object
