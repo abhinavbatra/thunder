@@ -11,7 +11,7 @@ import (
 // SchemaSyncer has a function that checks if the schema has changed,
 // and if so updates the planner in the federated executor
 type SchemaSyncer interface {
-	FetchPlanner(ctx context.Context, optionalArgs interface{}) (*Planner, error)
+	FetchPlanner(ctx context.Context) (*Planner, error)
 }
 type IntrospectionSchemaSyncer struct {
 	executors    map[string]ExecutorClient
@@ -27,10 +27,10 @@ func NewIntrospectionSchemaSyncer(ctx context.Context, executors map[string]Exec
 	return ss
 }
 
-func (s *IntrospectionSchemaSyncer) FetchPlanner(ctx context.Context, optionalArgs interface{}) (*Planner, error) {
+func (s *IntrospectionSchemaSyncer) FetchPlanner(ctx context.Context) (*Planner, error) {
 	schemas := make(map[string]*introspectionQueryResult)
 	for server, client := range s.executors {
-		resp, err := fetchSchema(ctx, client, optionalArgs)
+		resp, err := fetchSchema(ctx, client, nil)
 		schema := resp.Result
 		if err != nil {
 			return nil, oops.Wrapf(err, "fetching schema %s", server)
@@ -65,5 +65,5 @@ func (s *IntrospectionSchemaSyncer) FetchPlanner(ctx context.Context, optionalAr
 		return nil, oops.Wrapf(err, "converting schemas error")
 	}
 
-	return NewPlanner(types)
+	return NewPlanner(types, nil)
 }
