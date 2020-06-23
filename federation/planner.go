@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/samsarahq/go/oops"
 	"github.com/samsarahq/thunder/graphql"
 )
 
@@ -56,8 +57,30 @@ type Plan struct {
 // This breaks every query into subqueries that can each be resolved by a single graphQLServer
 // and describes what sub-queries need to be resolved first.
 type Planner struct {
-	schema    *SchemaWithFederationInfo //schema describes what fields the graphql servers know about along with the services that know how to execute each field
-	flattener *flattener                //flattener knows how to combine all the fragments on a query into a singel query
+	// schema describes what fields the graphql servers know about along with the services that know how to execute each field.
+	schema *SchemaWithFederationInfo
+	// flattener knows how to combine all the fragments on a query into a singel query.
+	flattener       *flattener
+	serviceSelector ServiceSelector
+}
+
+// serviceSelector is an optional field which can be used to override the <type,field> to service mapping,
+// which is useful during the fieldfunc migration.
+type ServiceSelector func(typeName string, fieldName string) string
+
+func NewPlanner(types *SchemaWithFederationInfo, optionalServiceSelector ServiceSelector) (*Planner, error) {
+	flattener, err := newFlattener(types.Schema)
+	if err != nil {
+		return nil, oops.Wrapf(err, "flattening schemas error")
+	}
+	// The planner is aware of the merged schema and what executors
+	// know about what fields
+	planner := &Planner{
+		schema:          types,
+		flattener:       flattener,
+		serviceSelector: optionalServiceSelector,
+	}
+	return planner, err
 }
 
 // Executing a subquery
@@ -79,7 +102,7 @@ type Planner struct {
 // 		  name
 // 		}
 // 	  }
-// }  
+// }
 // "__federation" becomes the root query that the subquery is nested under,
 // "Foo" is the federated object type that we need to refetch,
 // and "__typename" lets gateway know what type the object is.
@@ -104,7 +127,7 @@ func printSelections(selectionSet *graphql.SelectionSet) {
 		fmt.Println(" selections")
 		for _, subSelection := range selectionSet.Selections {
 			fmt.Println(" ", subSelection.Name)
-			if (subSelection.Args != nil) {
+			if subSelection.Args != nil {
 				fmt.Println("   args ", subSelection.Args)
 			}
 			printSelections(subSelection.SelectionSet)
@@ -114,6 +137,30 @@ func printSelections(selectionSet *graphql.SelectionSet) {
 			printSelections(subFragment.SelectionSet)
 		}
 	}
+}
+
+// maybeCustomService adds the input selection to either localSelections or
+// selectionByService if there is a serviceSelector in the planner and the user
+// has custom service setting for the selection. It returns a boolean to indicates
+// whether there is a custom service for the selection.
+func (e *Planner) maybeCustomService(
+	typeName, currentService string,
+	selection *graphql.Selection,
+	localSelections []*graphql.Selection,
+	selectionsByService map[string][]*graphql.Selection,
+) (bool, []*graphql.Selection, map[string][]*graphql.Selection) {
+	if e.serviceSelector == nil {
+		return false, localSelections, selectionsByService
+	}
+	customService := e.serviceSelector(typeName, selection.Name)
+	if customService == "" {
+		return false, localSelections, selectionsByService
+	}
+	if customService == currentService {
+		return true, append(localSelections, selection), selectionsByService
+	}
+	selectionsByService[customService] = append(selectionsByService[customService], selection)
+	return true, localSelections, selectionsByService
 }
 
 func (e *Planner) planObject(typ *graphql.Object, selectionSet *graphql.SelectionSet, service string) (*Plan, error) {
@@ -145,22 +192,27 @@ func (e *Planner) planObject(typ *graphql.Object, selectionSet *graphql.Selectio
 			return nil, fmt.Errorf("typ %s has no field %s", typ.Name, selection.Name)
 		}
 
-		fieldInfo := e.schema.Fields[field]
+		var hasCustomService bool
+		hasCustomService, localSelections, selectionsByService = e.maybeCustomService(typ.Name, service, selection, localSelections, selectionsByService)
 
-		// Prioritize resolving as many fields as we can in the current service
-		if fieldInfo.Services[service] {
-			localSelections = append(localSelections, selection)
-		} else {
-			serviceWithField := ""
+		if !hasCustomService {
+			fieldInfo := e.schema.Fields[field]
 
-			for service, hasField := range fieldInfo.Services {
-				if hasField {
-					serviceWithField = service
+			// Prioritize resolving as many fields as we can in the current service
+			if fieldInfo.Services[service] {
+				localSelections = append(localSelections, selection)
+			} else {
+				serviceWithField := ""
+
+				for service, hasField := range fieldInfo.Services {
+					if hasField {
+						serviceWithField = service
+					}
 				}
-			}
 
-			selectionsByService[serviceWithField] = append(
-				selectionsByService[serviceWithField], selection)
+				selectionsByService[serviceWithField] = append(
+					selectionsByService[serviceWithField], selection)
+			}
 		}
 	}
 
@@ -281,8 +333,8 @@ func (e *Planner) planUnion(typ *graphql.Union, selectionSet *graphql.SelectionS
 		SelectionSet: &graphql.SelectionSet{
 			Selections: []*graphql.Selection{
 				{
-					Name:  "__typename",
-					Alias: "__typename",
+					Name:         "__typename",
+					Alias:        "__typename",
 					UnparsedArgs: map[string]interface{}{},
 				},
 			},
