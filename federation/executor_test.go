@@ -493,7 +493,7 @@ func TestExecutorQueriesWithArgs(t *testing.T) {
 						"__key":1,
 						"id":1,
 						"name":"foo",
-						"orgId": 1,	
+						"orgId": 1,
 						"deviceWithArgs" : {
 								"__key": 2,
 								"id": 2,
@@ -506,12 +506,12 @@ func TestExecutorQueriesWithArgs(t *testing.T) {
 		},
 		{
 			Name: "query without necessary arguments",
-			Query: `	
-				query Foo {	
-					usersWithArgs(foo: "foo") {	
-						id	
-						name	
-					}	
+			Query: `
+				query Foo {
+					usersWithArgs(foo: "foo") {
+						id
+						name
+					}
 				}`,
 			Output:        "",
 			Error:         true,
@@ -552,8 +552,8 @@ func TestExecutorQueriesWithUnionTypes(t *testing.T) {
 					... on User {
 						id
 						email
-						device {	
-							id	
+						device {
+							id
 						}
 					}
 				}
